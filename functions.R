@@ -1,7 +1,9 @@
 ####### Packages #######
 
+library(readxl)
 library(bayesforecast)
 library(forecast)
+library(scoringRules)
 
 ####### Functions #######
 
