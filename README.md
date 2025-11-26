@@ -8,3 +8,15 @@ The goal of this project is to demonstrate how the concentration function can:
 - Quantify differences between predictive distributions
 - Provide a clear, interpretable, probabilistic comparison between two competing models
 - Complement traditional metrics with the concentration function, Pietra and Gini index
+
+---
+
+## Structure
+
+- `R/functions.R`  
+  - Core density function  
+  - General analytic estimator  
+  - Model-specific wrappers  
+  - RNG for each special case  
+  - Numeric MAP estimator  
+  - MLE for the Gamma model
