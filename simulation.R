@@ -105,3 +105,35 @@ mar_lik_q = mar_lik_q[floor(2*n/3):nn]
 log_likeli_q[j]=median(mar_lik_q)
 log_likeli_p[j]=median(mar_lik_p)
 }
+
+n_puntos <- nrow(PPp)
+n_replicas <- ncol(QQq)
+x=y <- seq(0, 1, length.out = n_puntos)
+mediaP <- rowMeans(PPp)
+mediaQ <- rowMeans(QQq)
+
+ic_infP <- apply(PPp, 1, quantile, probs = 0.025)
+ic_supP <- apply(PPp, 1, quantile, probs = 0.975)
+ic_infQ <- apply(QQq, 1, quantile, probs = 0.025)
+ic_supQ <- apply(QQq, 1, quantile, probs = 0.975)
+
+plot(x, mediaP, type = "l", lwd = 2, col = "blue",
+     ylim = range(c(ic_infP, ic_supP)),
+     xlab = "x", ylab = "")
+lines(x,y,type = "l", col=1,lwd=3)
+polygon(c(x, rev(x)), c(ic_supP, rev(ic_infP)),
+        col = rgb(0, 0, 1, 0.2), border = NA)
+lines(x, mediaP, lwd = 2, col = "blue")
+
+lines(x, mediaQ, type = "l", lwd = 2, col = "red",
+      ylim = range(c(ic_infQ, ic_supQ)),
+      xlab = "Población acumulada", ylab = "Variable acumulada")
+polygon(c(x, rev(x)), c(ic_supQ, rev(ic_infQ)),
+        col = rgb(1, 0, 1, 0.2), border = NA)
+lines(x, mediaQ, lwd = 2, col = "red")
+legend("bottomright",legend=c("M0: AR(1)","M1: MA(1)"),col=c(2,4),lty =c(1,1),lwd = rep(2,2),bty = "n")
+
+plot(mediaQ,mediaP,type = "l", lwd = 3, col = "brown",
+     ylim = range(c(0,1)),
+     xlab = "x", ylab = "")
+lines(x,y,type = "l", col=1,lwd=3,lty=1)
