@@ -176,7 +176,7 @@ print(summary_sim)
 M0_better_pietra <- pietra_M0_vec < pietra_M1_vec
 M0_better_gini   <- gini_M0_vec   < gini_M1_vec
 M0_better_nlpd   <- nlpd_M0_vec   < nlpd_M1_vec
-M0_better_ml     <- ml_M0_vec     > ml_M1_vec
+#M0_better_ml     <- ml_M0_vec     > ml_M1_vec
 
 agreement_rates <- data.frame(
   Criterion = c("Pietra index", "Gini concentration coefficient",
@@ -185,7 +185,8 @@ agreement_rates <- data.frame(
     round(100 * c(mean(M0_better_pietra),
                   mean(M0_better_gini),
                   mean(M0_better_nlpd),
-                  mean(M0_better_ml)), 1),
+                  #mean(M0_better_ml)), 
+          1),
     "%"
   )
 )
