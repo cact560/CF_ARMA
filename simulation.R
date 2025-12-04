@@ -164,7 +164,7 @@ summary_sim <- data.frame(
   Pietra_index = c(mean(pietra_M0_vec), mean(pietra_M1_vec)),
   Gini_concentration_coefficient = c(mean(gini_M0_vec), mean(gini_M1_vec)),
   NLPD = c(mean(nlpd_M0_vec), mean(nlpd_M1_vec)),
-  Marginal_log_likelihood = c(mean(ml_M0_vec), mean(ml_M1_vec)),
+  #Marginal_log_likelihood = c(mean(ml_M0_vec), mean(ml_M1_vec)),
   row.names = NULL
 )
 
