@@ -1,139 +1,194 @@
-##### Time series Simulation #####
-######### rolling origin #########
+###########################################
+# 2. Monte Carlo study: AR(1) vs MA(1)    #
+###########################################
+
+cat("\n### Part 1: Monte Carlo experiment (DGP = ARMA(1,1), M0 = AR(1), M1 = MA(1)) ###\n")
 
 set.seed(1234)
 
-m = 100 # simulated series
-n = 100 # number of observations
-p1 = 1 # Model 0
-q1 = 0
-p2 = 0 # Model 1
-q2 = 1
-ytt = matrix(0,n,m)
-f1=f2=r=pp=qq=PP=QQ=mar_lik_p=mar_lik_q=vector(mode(0))
-pietraP=pietraQ=giniP=giniQ=log_likeli_q=log_likeli_p=vector(mode(0))
+# 2.1 Settings (as in the article)
+N_REP    <- 100L         # number of Monte Carlo replications
+N        <- 100L         # length of each time series
+PHI_DGP   <- 0.2         # AR coefficient in DGP
+THETA_DGP <- 0.5         # MA coefficient in DGP
+SIGMA_DGP <- sqrt(0.16)  # innovation sd in DGP
 
-km = n-floor(2*n/3)+1
-mm = km-1
-PPp = QQq = matrix(0,mm,m)
-logscorepp = logscoreqq = vector(mode(0))
-logscoreP = logscoreQ = matrix(0,mm,m)
+T0 <- floor(2 * N / 3)   # initial training window (~2/3)
+K  <- N - T0             # number of forecast points
 
-iteraciones = 15000
-M=iteraciones/2
-posterior_arma1 = array(data = NA, dim = c(iteraciones/2,p1+q1+3,n))
-posterior_arma2 = array(data = NA, dim = c(iteraciones/2,p2+q2+3,n))
+# Stan settings (as in the article: 15000 iterations, 7500 warm-up)
+N_ITER_MCMC <- 15000L
+# For quick testing, you may temporarily reduce this number, e.g. 2000
 
-## Generated data with an ARMA(1,1)
-p_s = 1
-q_s = 1
+# 2.2 Worker function for a single Monte Carlo replication
 
-for(j in 1:m){
-ytt[,j] = arima.sim(n = n, list(ar = 0.2, ma = 0.5, sd = sqrt(0.16)))
-
-## Generation of the time series
-for(i in floor(2*n/3):(n-1)){
-  yt = ytt[1:i,j]
-  m1 = arima(yt,order=c(p1,0,q1))
-  m2 = arima(yt,order=c(p2,0,q2))
-  sfarma1 = stan_sarima(ts = yt,order = c(p1,0,q1),chains = 1,iter = iteraciones)
-  sfarma2 = stan_sarima(ts = yt,order = c(p2,0,q2),chains = 1,iter = iteraciones)
+simulate_single_rep_bayes <- function(rep_id) {
+  cat(sprintf("  - Replication %d\n", rep_id))
   
-  post_arma1 = extract_stan(sfarma1)
-  posterior_arma1[,1,i] = post_arma1$mu0
-  if(p1!=0) posterior_arma1[,2:(1+p1),i] = post_arma1$ar
-  if(q1!=0) posterior_arma1[,(2+p1):(1+p1+q1),i] = post_arma1$ma
-  posterior_arma1[,2+p1+q1,i] = post_arma1$sigma0
-  posterior_arma1[,p1+q1+3,i] = post_arma1$loglik
+  set.seed(1000 + rep_id)
   
-  post_arma2 = extract_stan(sfarma2)
-  posterior_arma2[,1,i] = post_arma2$mu0
-  if(p2!=0) posterior_arma2[,2:(1+p2),i] = post_arma2$ar
-  if(q2!=0) posterior_arma2[,(2+p2):(1+p2+q2),i] = post_arma2$ma
-  posterior_arma2[,2+p2+q2,i] = post_arma2$sigma0
-  posterior_arma2[,p2+q2+3,i] = post_arma2$loglik
+  # Generate ARMA(1,1) time series
+  y <- as.numeric(stats::arima.sim(
+    n    = N,
+    list(ar = PHI_DGP, ma = THETA_DGP),
+    sd   = SIGMA_DGP
+  ))
   
-  f1[i] = ytt[i+1,j]
-  an1 = residuals(sfarma1)
-  qqm = loglik_arma_pq(as.double(f1[i]),posterior_arma1[,1,i],posterior_arma1[,2:(1+p1),i],posterior_arma1[,(2+p1):(1+p1+q1),i],posterior_arma1[,2+p1+q1,i],yt[i:(i-p1+1)],an1[i:(i-q1+1)],p1,q1)
-  qq[i] = mean(exp(qqm))
-  logscoreqq[i] = mean(-qqm)
-  mar_lik_q[i] = marg.veros(posterior_arma1[,p1+q1+3,i],p1+q1+2)
+  # M0: AR(1), M1: MA(1)
+  p0 <- 1; q0 <- 0
+  p1 <- 0; q1 <- 1
   
-  an2 = residuals(sfarma2)
-  ppm = loglik_arma_pq(as.double(f1[i]),posterior_arma2[,1,i],posterior_arma2[,2:(1+p2),i],posterior_arma2[,(2+p2):(1+p2+q2),i],posterior_arma2[,2+p2+q2,i],yt[i:(i-p2+1)],an2[i:(i-q2+1)],p2,q2)
-  pp[i] = mean(exp(ppm))
-  logscorepp[i] = mean(-ppm)
-  mar_lik_p[i] = marg.veros(posterior_arma2[,p2+q2+3,i],p2+q2+2)
-  r[i] = pp[i]/qq[i]
+  d0_M0 <- p0 + q0 + 2  # number of parameters: ARs + MAs + mu + sigma
+  d0_M1 <- p1 + q1 + 2
+  
+  dens_M0 <- numeric(K)  # predictive density for M0 at each forecast
+  dens_M1 <- numeric(K)  # predictive density for M1
+  nlpd_M0 <- numeric(K)  # NLPD for M0
+  nlpd_M1 <- numeric(K)  # NLPD for M1
+  ml_M0   <- numeric(K)  # marginal log-likelihood (approx) for M0
+  ml_M1   <- numeric(K)  # marginal log-likelihood (approx) for M1
+  
+  # Rolling-origin forecasting
+  for (t in T0:(N - 1L)) {
+    k <- t - T0 + 1L
+    y_train  <- y[1:t]
+    y_future <- y[t + 1L]
+    
+    # Fit Bayesian AR(1)
+    fit0 <- bayesforecast::stan_sarima(
+      ts     = y_train,
+      order  = c(p0, 0, q0),
+      chains = 1,
+      iter   = N_ITER_MCMC
+    )
+    
+    # Fit Bayesian MA(1)
+    fit1 <- bayesforecast::stan_sarima(
+      ts     = y_train,
+      order  = c(p1, 0, q1),
+      chains = 1,
+      iter   = N_ITER_MCMC
+    )
+    
+    m0 <- predictive_metrics_bayes_arma(
+      fit0, y_train, y_future, p = p0, q = q0,
+      d0 = d0_M0, n_crps = 0L  # CRPS not needed in Monte Carlo study
+    )
+    
+    m1 <- predictive_metrics_bayes_arma(
+      fit1, y_train, y_future, p = p1, q = q1,
+      d0 = d0_M1, n_crps = 0L
+    )
+    
+    dens_M0[k] <- m0$pred_density
+    dens_M1[k] <- m1$pred_density
+    nlpd_M0[k] <- m0$nlpd
+    nlpd_M1[k] <- m1$nlpd
+    ml_M0[k]   <- m0$log_marginal
+    ml_M1[k]   <- m1$log_marginal
+  }
+  
+  # Build predictive distributions over the forecast window
+  p <- dens_M1 / sum(dens_M1)  # M1
+  q <- dens_M0 / sum(dens_M0)  # M0
+  
+  # Concentration vs uniform for each model
+  conc_M0_unif <- build_concentration_uniform(q)
+  conc_M1_unif <- build_concentration_uniform(p)
+  
+  gp_M0 <- compute_gini_pietra(conc_M0_unif$P, conc_M0_unif$Q)
+  gp_M1 <- compute_gini_pietra(conc_M1_unif$P, conc_M1_unif$Q)
+  
+  # Relative concentration of M1 relative to M0
+  conc_rel <- build_concentration_relative(p, q)
+  gp_rel   <- compute_gini_pietra(conc_rel$P, conc_rel$Q)
+  
+  list(
+    conc_M0_P = conc_M0_unif$P,
+    conc_M0_Q = conc_M0_unif$Q,
+    conc_M1_P = conc_M1_unif$P,
+    conc_M1_Q = conc_M1_unif$Q,
+    conc_rel_P = conc_rel$P,
+    conc_rel_Q = conc_rel$Q,
+    gini_M0   = gp_M0$Gini,
+    pietra_M0 = gp_M0$Pietra,
+    gini_M1   = gp_M1$Gini,
+    pietra_M1 = gp_M1$Pietra,
+    gini_rel   = gp_rel$Gini,
+    pietra_rel = gp_rel$Pietra,
+    mean_nlpd_M0 = mean(nlpd_M0),
+    mean_nlpd_M1 = mean(nlpd_M1),
+    mean_ml_M0   = mean(ml_M0),
+    mean_ml_M1   = mean(ml_M1)
+  )
 }
 
-nn = n-1
-pp = pp[floor(2*n/3):nn]
-qq = qq[floor(2*n/3):nn]
-r = r[floor(2*n/3):nn]
-f1 = f1[floor(2*n/3):nn]
-p_a = pp/sum(pp)
-q_a = qq/sum(qq)
-aux1 = cbind(r,f1,p_a,q_a)
-aux1 = aux1[order(aux1[,3]), ]
-aux2 = aux1[order(aux1[,4]), ]
+# 2.3 Run all Monte Carlo replications (parallel on Linux/macOS, sequential on Windows)
 
-logscoreP[,j] = logscorepp[floor(2*n/3):nn]
-logscoreQ[,j] = logscoreqq[floor(2*n/3):nn]
+use_parallel <- (.Platform$OS.type != "windows" && N_CORES > 1L)
 
-for (k in 1:mm){
-  PP[k] = sum(aux1[1:k,3])
-  QQ[k] = sum(aux2[1:k,4])
+if (use_parallel) {
+  sim_list <- parallel::mclapply(
+    X        = 1:N_REP,
+    FUN      = simulate_single_rep_bayes,
+    mc.cores = N_CORES
+  )
+} else {
+  cat("Running Monte Carlo study sequentially (no mclapply on this OS).\n")
+  sim_list <- lapply(1:N_REP, simulate_single_rep_bayes)
 }
 
-PPp[,j] = PP/PP[mm]
-QQq[,j] = QQ/QQ[mm]
+# 2.4 Collect Monte Carlo results
 
-# Pietra and Gini index
-pietraP[j] = max(1:mm/mm-PPp[,j])
-pietraQ[j] = max(1:mm/mm-QQq[,j])
+P_M0_mat <- do.call(cbind, lapply(sim_list, `[[`, "conc_M0_P"))  # K x N_REP
+P_M1_mat <- do.call(cbind, lapply(sim_list, `[[`, "conc_M1_P"))  # K x N_REP
 
-ident = 1:mm/mm
-giniP[j] = 1/2-1/2*sum((PPp[2:mm,j]+PPp[1:(mm-1),j])*(ident[2:mm]-ident[1:(mm-1)]))
-giniQ[j] = 1/2-1/2*sum((QQq[2:mm,j]+QQq[1:(mm-1),j])*(ident[2:mm]-ident[1:(mm-1)]))
+P_rel_mat <- do.call(cbind, lapply(sim_list, `[[`, "conc_rel_P"))
+Q_rel_mat <- do.call(cbind, lapply(sim_list, `[[`, "conc_rel_Q"))
 
-# Marginal likelihood
-mar_lik_p = mar_lik_p[floor(2*n/3):nn]
-mar_lik_q = mar_lik_q[floor(2*n/3):nn]
+gini_M0_vec   <- sapply(sim_list, `[[`, "gini_M0")
+gini_M1_vec   <- sapply(sim_list, `[[`, "gini_M1")
+pietra_M0_vec <- sapply(sim_list, `[[`, "pietra_M0")
+pietra_M1_vec <- sapply(sim_list, `[[`, "pietra_M1")
 
-log_likeli_q[j] = median(mar_lik_q)
-log_likeli_p[j] = median(mar_lik_p)
-}
+nlpd_M0_vec <- sapply(sim_list, `[[`, "mean_nlpd_M0")
+nlpd_M1_vec <- sapply(sim_list, `[[`, "mean_nlpd_M1")
 
-n_puntos = nrow(PPp)
-n_replicas = ncol(QQq)
-x = y = seq(0, 1, length.out = n_puntos)
-mediaP = rowMeans(PPp)
-mediaQ = rowMeans(QQq)
+ml_M0_vec   <- sapply(sim_list, `[[`, "mean_ml_M0")
+ml_M1_vec   <- sapply(sim_list, `[[`, "mean_ml_M1")
 
-ic_infP = apply(PPp, 1, quantile, probs = 0.025)
-ic_supP = apply(PPp, 1, quantile, probs = 0.975)
-ic_infQ = apply(QQq, 1, quantile, probs = 0.025)
-ic_supQ = apply(QQq, 1, quantile, probs = 0.975)
+# 2.5 Monte Carlo summary (analogous to Table 1)
 
-plot(x, mediaP, type = "l", lwd = 2, col = "blue",
-     ylim = range(c(ic_infP, ic_supP)),
-     xlab = "x", ylab = "")
-lines(x,y,type = "l", col=1,lwd=3)
-polygon(c(x, rev(x)), c(ic_supP, rev(ic_infP)),
-        col = rgb(0, 0, 1, 0.2), border = NA)
-lines(x, mediaP, lwd = 2, col = "blue")
+summary_sim <- data.frame(
+  Model = c("M0: AR(1)", "M1: MA(1)"),
+  Pietra_index = c(mean(pietra_M0_vec), mean(pietra_M1_vec)),
+  Gini_concentration_coefficient = c(mean(gini_M0_vec), mean(gini_M1_vec)),
+  NLPD = c(mean(nlpd_M0_vec), mean(nlpd_M1_vec)),
+  Marginal_log_likelihood = c(mean(ml_M0_vec), mean(ml_M1_vec)),
+  row.names = NULL
+)
 
-lines(x, mediaQ, type = "l", lwd = 2, col = "red",
-      ylim = range(c(ic_infQ, ic_supQ)),
-      xlab = "Población acumulada", ylab = "Variable acumulada")
-polygon(c(x, rev(x)), c(ic_supQ, rev(ic_infQ)),
-        col = rgb(1, 0, 1, 0.2), border = NA)
-lines(x, mediaQ, lwd = 2, col = "red")
-legend("bottomright",legend=c("M0: AR(1)","M1: MA(1)"),col=c(2,4),lty =c(1,1),lwd = rep(2,2),bty = "n")
+cat("\nMonte Carlo summary (averages over replications):\n")
+print(summary_sim)
 
-plot(mediaQ,mediaP,type = "l", lwd = 3, col = "brown",
-     ylim = range(c(0,1)),
-     xlab = "x", ylab = "")
-lines(x,y,type = "l", col=1,lwd=3,lty=1)
+# 2.6 Agreement rates (analogous to Table 2)
+
+M0_better_pietra <- pietra_M0_vec < pietra_M1_vec
+M0_better_gini   <- gini_M0_vec   < gini_M1_vec
+M0_better_nlpd   <- nlpd_M0_vec   < nlpd_M1_vec
+M0_better_ml     <- ml_M0_vec     > ml_M1_vec
+
+agreement_rates <- data.frame(
+  Criterion = c("Pietra index", "Gini concentration coefficient",
+                "NLPD", "Marginal log-likelihood"),
+  `M0 better than M1` = paste0(
+    round(100 * c(mean(M0_better_pietra),
+                  mean(M0_better_gini),
+                  mean(M0_better_nlpd),
+                  mean(M0_better_ml)), 1),
+    "%"
+  )
+)
+
+cat("\nAgreement rates (M0 better than M1):\n")
+print(agreement_rates, row.names = FALSE)
